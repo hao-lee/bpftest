@@ -77,5 +77,14 @@ struct cgroup_metrics {
 	u64 pgfile_free;
 	/* host & cg: freed anon page count */
 	u64 pganon_free;
+	/* cg: pages scaned by kswapd */
+	u64 pgscan_kswapd;
+	/* cg: pages reclaimed by kswapd */
+	u64 pgsteal_kswapd;
+	/* cg: pages scaned by allocation direct reclaim and try_charge reclaim */
+	u64 pgscan_direct;
+	/* cg: pages reclaimed by allocation direct reclaim and try_charge reclaim */
+	u64 pgsteal_direct;
+
 };
 #endif /* _COMMON_H_ */

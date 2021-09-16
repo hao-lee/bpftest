@@ -150,6 +150,12 @@ func main() {
 		log.Fatalf("opening kprobe: %s", err)
 	}
 	defer kp16.Close()
+
+	kp17, err := link.Kprobe("memcg_stat_show", objs.KprobeMemcgStatShow)
+	if err != nil {
+		log.Fatalf("opening kprobe: %s", err)
+	}
+	defer kp17.Close()
 	// Read loop reporting the total amount of times the kernel
 	// function was entered, once per second.
 	ticker := time.NewTicker(1 * time.Second)

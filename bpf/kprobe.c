@@ -1,6 +1,7 @@
 #include "common.h"
 #include "vmlinux.h"
 #include "bpf_helpers.h"
+#include "bpf_core_read.h"
 
 char __license[] SEC("license") = "Dual MIT/GPL";
 
@@ -646,6 +647,53 @@ int kprobe_uncharge_page_cg(struct pt_regs *ctx)
 		__sync_fetch_and_add(&valp->pganon_free, 1);
 	else
 		__sync_fetch_and_add(&valp->pgfile_free, 1);
+	return 0;
+}
+
+SEC("kprobe/memcg_stat_show")
+int kprobe_memcg_stat_show(struct pt_regs *ctx)
+{
+	int cgroup_id, ret;
+	struct cgroup_metrics *valp;
+	struct mem_cgroup *memcg;
+	struct seq_file *seq;
+	atomic64_t tmp;
+	struct cgroup *cgrp;
+	struct cftype *cft;
+	int subsys_id;
+	struct kernfs_open_file *of;
+	struct cgroup_subsys_state *css;
+
+	seq = (struct seq_file *)ctx->di;
+	of = BPF_CORE_READ(seq, private);
+	cgrp = BPF_CORE_READ(of, kn, parent, priv);
+	cft = BPF_CORE_READ(of, kn, priv);
+	subsys_id = BPF_CORE_READ(cft, ss, id);
+	css = BPF_CORE_READ(cgrp, subsys[subsys_id]);
+	memcg = (struct mem_cgroup *)css;
+	if (!memcg)
+		return 0;
+	cgroup_id = get_cgroup_id_from_memcg(memcg);
+	if (cgroup_id < 0)
+		return 0;
+
+	valp = bpf_map_lookup_elem(&cgroup_metrictable, &cgroup_id);
+	if (!valp) {
+		struct cgroup_metrics new_metrics = {0};
+		bpf_map_update_elem(&cgroup_metrictable, &cgroup_id, &new_metrics, BPF_ANY);
+		valp = bpf_map_lookup_elem(&cgroup_metrictable, &cgroup_id);
+	}
+	if (!valp)
+		return 0;
+
+	tmp = BPF_CORE_READ(memcg, events[PGSCAN_KSWAPD]);
+	valp->pgscan_kswapd = tmp.counter;
+	tmp = BPF_CORE_READ(memcg, events[PGSTEAL_KSWAPD]);
+	valp->pgsteal_kswapd = tmp.counter;
+	tmp = BPF_CORE_READ(memcg, events[PGSCAN_DIRECT]);
+	valp->pgscan_direct = tmp.counter;
+	tmp = BPF_CORE_READ(memcg, events[PGSTEAL_DIRECT]);
+	valp->pgsteal_direct = tmp.counter;
 	return 0;
 }
 

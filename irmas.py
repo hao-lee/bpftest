@@ -7,7 +7,8 @@ host_metric_names = ["compaction_stat", "allocstall_stat", "pgfile_alloc",
 cgroup_metric_names = ["nr_dirtied", "nr_written",
         "directstall_stat", "directstall_count",
         "numa_page_migrate", "pgfile_alloc", "pganon_alloc",
-        "pgfile_free", "pganon_free"]
+        "pgfile_free", "pganon_free", "pgscan_kswapd", "pgsteal_kswapd",
+        "pgscan_direct", "pgsteal_direct"]
 
 '''
 cgid : {
