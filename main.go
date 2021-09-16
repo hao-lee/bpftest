@@ -67,89 +67,89 @@ func main() {
 	}
 	defer kp2.Close()
 
-	kp6, err := link.Kprobe("try_to_compact_pages", objs.KprobeTryToCompactPages)
+	kp3, err := link.Kprobe("try_to_compact_pages", objs.KprobeTryToCompactPages)
+	if err != nil {
+		log.Fatalf("opening kprobe: %s", err)
+	}
+	defer kp3.Close()
+
+	kp4, err := link.Kretprobe("try_to_compact_pages", objs.KretprobeTryToCompactPages)
+	if err != nil {
+		log.Fatalf("opening kprobe: %s", err)
+	}
+	defer kp4.Close()
+
+	kp5, err := link.Kprobe("try_to_free_pages", objs.KprobeTryToFreePages)
+	if err != nil {
+		log.Fatalf("opening kprobe: %s", err)
+	}
+	defer kp5.Close()
+
+	kp6, err := link.Kretprobe("try_to_free_pages", objs.KretprobeTryToFreePages)
 	if err != nil {
 		log.Fatalf("opening kprobe: %s", err)
 	}
 	defer kp6.Close()
 
-	kp7, err := link.Kretprobe("try_to_compact_pages", objs.KretprobeTryToCompactPages)
+	kp7, err := link.Kprobe("shrink_node_memcg", objs.KprobeShrinkNodeMemcg)
 	if err != nil {
 		log.Fatalf("opening kprobe: %s", err)
 	}
 	defer kp7.Close()
 
-	kp8, err := link.Kprobe("try_to_free_pages", objs.KprobeTryToFreePages)
+	kp8, err := link.Kretprobe("shrink_node_memcg", objs.KretprobeShrinkNodeMemcg)
 	if err != nil {
 		log.Fatalf("opening kprobe: %s", err)
 	}
 	defer kp8.Close()
 
-	kp9, err := link.Kretprobe("try_to_free_pages", objs.KretprobeTryToFreePages)
+	kp9, err := link.Kprobe("shrink_node_memcg", objs.KprobeShrinkNodeMemcgCounting)
 	if err != nil {
 		log.Fatalf("opening kprobe: %s", err)
 	}
 	defer kp9.Close()
 
-	kp10, err := link.Kprobe("shrink_node_memcg", objs.KprobeShrinkNodeMemcg)
+	kp10, err := link.Kprobe("migrate_misplaced_page", objs.KprobeMigrateMisplacedPage)
 	if err != nil {
 		log.Fatalf("opening kprobe: %s", err)
 	}
 	defer kp10.Close()
 
-	kp11, err := link.Kretprobe("shrink_node_memcg", objs.KretprobeShrinkNodeMemcg)
+	kp11, err := link.Kretprobe("new_slab", objs.KretprobeNewSlab)
 	if err != nil {
 		log.Fatalf("opening kprobe: %s", err)
 	}
 	defer kp11.Close()
 
-	kp12, err := link.Kprobe("shrink_node_memcg", objs.KprobeShrinkNodeMemcgCounting)
+	kp12, err := link.Kprobe("page_add_new_anon_rmap", objs.KprobePageAddNewAnonRmap)
 	if err != nil {
 		log.Fatalf("opening kprobe: %s", err)
 	}
 	defer kp12.Close()
 
-	kp19, err := link.Kprobe("migrate_misplaced_page", objs.KprobeMigrateMisplacedPage)
+	kp13, err := link.Kprobe("__page_cache_alloc", objs.KprobePageCacheAlloc)
 	if err != nil {
 		log.Fatalf("opening kprobe: %s", err)
 	}
-	defer kp19.Close()
+	defer kp13.Close()
 
-	kp20, err := link.Kretprobe("new_slab", objs.KretprobeNewSlab)
+	kp14, err := link.Kprobe("mem_cgroup_commit_charge", objs.KprobeMemCgroupCommitCharge)
 	if err != nil {
 		log.Fatalf("opening kprobe: %s", err)
 	}
-	defer kp20.Close()
+	defer kp14.Close()
 
-	kp15, err := link.Kprobe("page_add_new_anon_rmap", objs.KprobePageAddNewAnonRmap)
+	kp15, err := link.Kprobe("uncharge_page", objs.KprobeUnchargePageHost)
 	if err != nil {
 		log.Fatalf("opening kprobe: %s", err)
 	}
 	defer kp15.Close()
 
-	kp17, err := link.Kprobe("__page_cache_alloc", objs.KprobePageCacheAlloc)
+	kp16, err := link.Kprobe("uncharge_page", objs.KprobeUnchargePageCg)
 	if err != nil {
 		log.Fatalf("opening kprobe: %s", err)
 	}
-	defer kp17.Close()
-
-	kp21, err := link.Kprobe("mem_cgroup_commit_charge", objs.KprobeMemCgroupCommitCharge)
-	if err != nil {
-		log.Fatalf("opening kprobe: %s", err)
-	}
-	defer kp21.Close()
-
-	kp22, err := link.Kprobe("uncharge_page", objs.KprobeUnchargePageHost)
-	if err != nil {
-		log.Fatalf("opening kprobe: %s", err)
-	}
-	defer kp22.Close()
-
-	kp23, err := link.Kprobe("uncharge_page", objs.KprobeUnchargePageCg)
-	if err != nil {
-		log.Fatalf("opening kprobe: %s", err)
-	}
-	defer kp23.Close()
+	defer kp16.Close()
 	// Read loop reporting the total amount of times the kernel
 	// function was entered, once per second.
 	ticker := time.NewTicker(1 * time.Second)
