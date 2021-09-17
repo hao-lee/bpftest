@@ -191,7 +191,10 @@ int get_cgroup_id_from_page(struct page *page)
 	return get_cgroup_id_from_memcg(memcg);
 }
 
-int get_ns_id_from_memcg(struct mem_cgroup *memcg)
+/*
+ * zero means invalid ns id
+ */
+u32 get_ns_id_from_memcg(struct mem_cgroup *memcg)
 {
 	struct cgroup *cgrp;
 	struct task_struct *tsk;
@@ -201,12 +204,16 @@ int get_ns_id_from_memcg(struct mem_cgroup *memcg)
 	struct list_head *lh;
 	u32 ns_id;
 	int pid;
+	int nr_tasks;
 
 	css = (struct cgroup_subsys_state *)memcg;
 	cgrp = BPF_CORE_READ(css, cgroup);
 	lh = BPF_CORE_READ(cgrp, cset_links.next);
 	link = container_of(lh, struct cgrp_cset_link, cset_link);
 	cset = BPF_CORE_READ(link, cset);
+	nr_tasks = BPF_CORE_READ(cset, nr_tasks);
+	if (nr_tasks == 0)
+		return 0;
 	lh = BPF_CORE_READ(cset, tasks.next);
 	tsk = container_of(lh, struct task_struct, cg_list);
 	ns_id = BPF_CORE_READ(tsk, nsproxy, pid_ns_for_children, ns.inum);
@@ -215,23 +222,39 @@ int get_ns_id_from_memcg(struct mem_cgroup *memcg)
 	return ns_id;
 }
 
+u32 get_ns_id_from_page(struct page *page)
+{
+	struct mem_cgroup *memcg;
+	int ret = 0;
+
+	if (!page)
+		return 0;
+
+	ret = bpf_probe_read_kernel(&memcg, sizeof(memcg), &page->mem_cgroup);
+	if (ret)
+		return 0;
+	if (!memcg)
+		return 0;
+	return get_ns_id_from_memcg(memcg);
+}
+
 SEC("kprobe/account_page_dirtied")
 int kprobe_account_page_dirtied(struct pt_regs *ctx)
 {
 	u64 initval = 1;
 	struct cgroup_metrics *valp;
-	int cgroup_id;
+	u32 ns_id;
 
-	cgroup_id = get_cgroup_id_from_page((struct page *)ctx->di);
-	if (cgroup_id < 0)
+	ns_id = get_ns_id_from_page((struct page *)ctx->di);
+	if (ns_id == 0)
 		return 0;
 
-	valp = bpf_map_lookup_elem(&cgroup_metrictable, &cgroup_id);
+	valp = bpf_map_lookup_elem(&cgroup_metrictable, &ns_id);
 	if (!valp) {
 		struct cgroup_metrics new_metrics = {
 			.nr_dirtied = 1,
 		};
-		bpf_map_update_elem(&cgroup_metrictable, &cgroup_id, &new_metrics, BPF_ANY);
+		bpf_map_update_elem(&cgroup_metrictable, &ns_id, &new_metrics, BPF_ANY);
 		return 0;
 	}
 	__sync_fetch_and_add(&valp->nr_dirtied, 1);
@@ -246,23 +269,23 @@ int kprobe_test_clear_page_writeback(struct pt_regs *ctx)
 	struct cgroup_metrics *valp;
 	unsigned long page_flags;
 	struct page *page;
-	int cgroup_id;
+	u32 ns_id;
 
 	page = (struct page *)ctx->di;
 	bpf_probe_read_kernel(&page_flags, sizeof(page_flags), &page->flags);
 	if (!(page_flags & (1 << PG_writeback)))
 		return 0;
 
-	cgroup_id = get_cgroup_id_from_page(page);
-	if (cgroup_id < 0)
+	ns_id = get_ns_id_from_page(page);
+	if (ns_id == 0)
 		return 0;
 
-	valp = bpf_map_lookup_elem(&cgroup_metrictable, &cgroup_id);
+	valp = bpf_map_lookup_elem(&cgroup_metrictable, &ns_id);
 	if (!valp) {
 		struct cgroup_metrics new_metrics = {
 			.nr_written = 1,
 		};
-		bpf_map_update_elem(&cgroup_metrictable, &cgroup_id, &new_metrics, BPF_ANY);
+		bpf_map_update_elem(&cgroup_metrictable, &ns_id, &new_metrics, BPF_ANY);
 		return 0;
 	}
 	__sync_fetch_and_add(&valp->nr_written, 1);
@@ -350,7 +373,7 @@ SEC("kprobe/shrink_node_memcg")
 int kprobe_shrink_node_memcg(struct pt_regs *ctx)
 {
 	int ret = 0;
-	int cgroup_id;
+	u32 ns_id;
 	struct task_struct *tsk;
 	unsigned int task_flags = 0;
 
@@ -361,10 +384,10 @@ int kprobe_shrink_node_memcg(struct pt_regs *ctx)
 	if (task_flags & PF_KSWAPD)
 		return ret;
 
-	cgroup_id = get_cgroup_id_from_memcg((struct mem_cgroup *)ctx->si);
-	if (cgroup_id < 0)
-		cgroup_id = 0;
-	if (start_timing_with_payload(ctx, cgroup_id)) {
+	ns_id = get_ns_id_from_memcg((struct mem_cgroup *)ctx->si);
+	if (ns_id == 0)
+		return 0;
+	if (start_timing_with_payload(ctx, ns_id)) {
 		/* print something ? */
 		return 0; /* stack is full */
 	}
@@ -376,7 +399,7 @@ int kretprobe_shrink_node_memcg(struct pt_regs *ctx)
 {
 	u64 initval = 1;
 	u64 delta = 0;
-	u64 cgroup_id = 0;
+	u32 ns_id;
 	struct cgroup_metrics *valp;
 	int ret = 0;
 	struct task_struct *tsk;
@@ -389,17 +412,17 @@ int kretprobe_shrink_node_memcg(struct pt_regs *ctx)
 	if (task_flags & PF_KSWAPD)
 		return ret;
 
-	if (end_timing_get_payload(ctx, &delta, &cgroup_id)) {
+	if (end_timing_get_payload(ctx, &delta, &ns_id)) {
 		/* Try to pop a empty stack */
 		return 0;
 	}
 
-	valp = bpf_map_lookup_elem(&cgroup_metrictable, &cgroup_id);
+	valp = bpf_map_lookup_elem(&cgroup_metrictable, &ns_id);
 	if (!valp) {
 		struct cgroup_metrics new_metrics = {
 			.directstall_stat = 1,
 		};
-		bpf_map_update_elem(&cgroup_metrictable, &cgroup_id, &new_metrics, BPF_ANY);
+		bpf_map_update_elem(&cgroup_metrictable, &ns_id, &new_metrics, BPF_ANY);
 		return 0;
 	}
 	__sync_fetch_and_add(&valp->directstall_stat, delta);
@@ -411,7 +434,7 @@ int kprobe_shrink_node_memcg_counting(struct pt_regs *ctx)
 {
 	u64 initval = 1;
 	u64 delta = 0;
-	int cgroup_id;
+	u32 ns_id;
 	struct cgroup_metrics *valp;
 	int ret = 0;
 	struct task_struct *tsk;
@@ -424,16 +447,16 @@ int kprobe_shrink_node_memcg_counting(struct pt_regs *ctx)
 	if (task_flags & PF_KSWAPD)
 		return ret;
 
-	cgroup_id = get_cgroup_id_from_memcg((struct mem_cgroup *)ctx->si);
-	if (cgroup_id < 0)
+	ns_id = get_ns_id_from_memcg((struct mem_cgroup *)ctx->si);
+	if (ns_id == 0)
 		return 0;
 
-	valp = bpf_map_lookup_elem(&cgroup_metrictable, &cgroup_id);
+	valp = bpf_map_lookup_elem(&cgroup_metrictable, &ns_id);
 	if (!valp) {
 		struct cgroup_metrics new_metrics = {
 			.directstall_count = 1,
 		};
-		bpf_map_update_elem(&cgroup_metrictable, &cgroup_id, &new_metrics, BPF_ANY);
+		bpf_map_update_elem(&cgroup_metrictable, &ns_id, &new_metrics, BPF_ANY);
 		return 0;
 	}
 	__sync_fetch_and_add(&valp->directstall_count, 1);
@@ -444,19 +467,19 @@ SEC("kprobe/migrate_misplaced_page")
 int kprobe_migrate_misplaced_page(struct pt_regs *ctx)
 {
 	u64 initval = 1;
-	int cgroup_id;
+	u32 ns_id;
 	struct cgroup_metrics *valp;
 
-	cgroup_id = get_cgroup_id_from_page((struct page *)ctx->di);
-	if (cgroup_id < 0)
+	ns_id = get_ns_id_from_page((struct page *)ctx->di);
+	if (ns_id == 0)
 		return 0;
 
-	valp = bpf_map_lookup_elem(&cgroup_metrictable, &cgroup_id);
+	valp = bpf_map_lookup_elem(&cgroup_metrictable, &ns_id);
 	if (!valp) {
 		struct cgroup_metrics new_metrics = {
 			.numa_page_migrate = 1,
 		};
-		bpf_map_update_elem(&cgroup_metrictable, &cgroup_id, &new_metrics, BPF_ANY);
+		bpf_map_update_elem(&cgroup_metrictable, &ns_id, &new_metrics, BPF_ANY);
 		return 0;
 	}
 	__sync_fetch_and_add(&valp->numa_page_migrate, 1);
@@ -570,7 +593,7 @@ SEC("kprobe/mem_cgroup_commit_charge")
 int kprobe_mem_cgroup_commit_charge(struct pt_regs *ctx)
 {
 	u64 initval = 1;
-	int cgroup_id;
+	u32 ns_id;
 	struct cgroup_metrics *valp;
 	unsigned long page_flags;
 	struct page *page;
@@ -578,21 +601,21 @@ int kprobe_mem_cgroup_commit_charge(struct pt_regs *ctx)
 
 	memcg = (struct mem_cgroup *)ctx->si;
 	get_ns_id_from_memcg(memcg);
-	cgroup_id = get_cgroup_id_from_memcg(memcg);
-	if (cgroup_id < 0)
+	ns_id = get_ns_id_from_memcg(memcg);
+	if (ns_id == 0)
 		return 0;
 
 	page = (struct page *)ctx->di;
 	bpf_probe_read_kernel(&page_flags, sizeof(page_flags), &page->flags);
 
-	valp = bpf_map_lookup_elem(&cgroup_metrictable, &cgroup_id);
+	valp = bpf_map_lookup_elem(&cgroup_metrictable, &ns_id);
 	if (!valp) {
 		struct cgroup_metrics new_metrics = {};
 		if (page_flags & (1 << PG_swapbacked))
 			new_metrics.pganon_alloc = 1;
 		else
 			new_metrics.pgfile_alloc = 1;
-		bpf_map_update_elem(&cgroup_metrictable, &cgroup_id, &new_metrics, BPF_ANY);
+		bpf_map_update_elem(&cgroup_metrictable, &ns_id, &new_metrics, BPF_ANY);
 		return 0;
 	}
 	if (page_flags & (1 << PG_swapbacked))
@@ -609,7 +632,7 @@ SEC("kprobe/uncharge_page_host")
 int kprobe_uncharge_page_host(struct pt_regs *ctx)
 {
 	u64 initval = 1;
-	int cgroup_id, ret;
+	int ret;
 	unsigned long page_flags;
 	struct page *page;
 	struct mem_cgroup *memcg;
@@ -643,29 +666,30 @@ SEC("kprobe/uncharge_page_cg")
 int kprobe_uncharge_page_cg(struct pt_regs *ctx)
 {
 	u64 initval = 1;
-	int cgroup_id, ret;
+	int ret;
+	u32 ns_id;
 	struct cgroup_metrics *valp;
 	unsigned long page_flags;
 	struct page *page;
 	struct mem_cgroup *memcg;
 
 	page = (struct page *)ctx->di;
-	cgroup_id = get_cgroup_id_from_page(page);
-	if (cgroup_id < 0)
+	ns_id = get_ns_id_from_page(page);
+	if (ns_id == 0)
 		return 0;
 
 	ret = bpf_probe_read_kernel(&page_flags, sizeof(page_flags), &page->flags);
 	if (ret)
 		return ret;
 
-	valp = bpf_map_lookup_elem(&cgroup_metrictable, &cgroup_id);
+	valp = bpf_map_lookup_elem(&cgroup_metrictable, &ns_id);
 	if (!valp) {
 		struct cgroup_metrics new_metrics = {};
 		if (page_flags & (1 << PG_swapbacked))
 			new_metrics.pganon_free = 1;
 		else
 			new_metrics.pgfile_free = 1;
-		bpf_map_update_elem(&cgroup_metrictable, &cgroup_id, &new_metrics, BPF_ANY);
+		bpf_map_update_elem(&cgroup_metrictable, &ns_id, &new_metrics, BPF_ANY);
 		return 0;
 	}
 	if (page_flags & (1 << PG_swapbacked))
@@ -678,7 +702,7 @@ int kprobe_uncharge_page_cg(struct pt_regs *ctx)
 SEC("kprobe/memcg_stat_show")
 int kprobe_memcg_stat_show(struct pt_regs *ctx)
 {
-	int cgroup_id, ret;
+	int ns_id, ret;
 	struct cgroup_metrics *valp;
 	struct mem_cgroup *memcg;
 	struct seq_file *seq;
@@ -698,15 +722,15 @@ int kprobe_memcg_stat_show(struct pt_regs *ctx)
 	memcg = (struct mem_cgroup *)css;
 	if (!memcg)
 		return 0;
-	cgroup_id = get_cgroup_id_from_memcg(memcg);
-	if (cgroup_id < 0)
+	ns_id = get_ns_id_from_memcg(memcg);
+	if (ns_id == 0)
 		return 0;
 
-	valp = bpf_map_lookup_elem(&cgroup_metrictable, &cgroup_id);
+	valp = bpf_map_lookup_elem(&cgroup_metrictable, &ns_id);
 	if (!valp) {
 		struct cgroup_metrics new_metrics = {0};
-		bpf_map_update_elem(&cgroup_metrictable, &cgroup_id, &new_metrics, BPF_ANY);
-		valp = bpf_map_lookup_elem(&cgroup_metrictable, &cgroup_id);
+		bpf_map_update_elem(&cgroup_metrictable, &ns_id, &new_metrics, BPF_ANY);
+		valp = bpf_map_lookup_elem(&cgroup_metrictable, &ns_id);
 	}
 	if (!valp)
 		return 0;
