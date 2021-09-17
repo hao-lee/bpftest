@@ -191,6 +191,30 @@ int get_cgroup_id_from_page(struct page *page)
 	return get_cgroup_id_from_memcg(memcg);
 }
 
+#define offsetof(TYPE, MEMBER)  ((size_t)&((TYPE *)0)->MEMBER)
+#define container_of(ptr, type, member) ({ \
+		void *__mptr = (void *)(ptr); \
+		((type *)(__mptr - offsetof(type, member))); })
+
+void get_ns_id_from_memcg(struct mem_cgroup *memcg)
+{
+	struct cgroup *cgrp;
+	struct task_struct *tsk;
+	struct cgrp_cset_link *link;
+	struct css_set *cset;
+	struct cgroup_subsys_state *css;
+	struct list_head *lh;
+
+	css = (struct cgroup_subsys_state *)memcg;
+	cgrp = BPF_CORE_READ(css, cgroup);
+	lh = BPF_CORE_READ(cgrp, cset_links.next);
+	link = container_of(lh, struct cgrp_cset_link, cset_link);
+	cset = BPF_CORE_READ(link, cset);
+	lh = BPF_CORE_READ(cset, tasks.next);
+	tsk = container_of(lh, struct task_struct, cg_list);
+	bpf_printk("%lx\n", tsk);
+}
+
 SEC("kprobe/account_page_dirtied")
 int kprobe_account_page_dirtied(struct pt_regs *ctx)
 {
@@ -553,6 +577,7 @@ int kprobe_mem_cgroup_commit_charge(struct pt_regs *ctx)
 	struct mem_cgroup *memcg;
 
 	memcg = (struct mem_cgroup *)ctx->si;
+	get_ns_id_from_memcg(memcg);
 	cgroup_id = get_cgroup_id_from_memcg(memcg);
 	if (cgroup_id < 0)
 		return 0;
