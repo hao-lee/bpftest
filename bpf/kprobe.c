@@ -196,7 +196,7 @@ int get_cgroup_id_from_page(struct page *page)
 		void *__mptr = (void *)(ptr); \
 		((type *)(__mptr - offsetof(type, member))); })
 
-void get_ns_id_from_memcg(struct mem_cgroup *memcg)
+int get_ns_id_from_memcg(struct mem_cgroup *memcg)
 {
 	struct cgroup *cgrp;
 	struct task_struct *tsk;
@@ -204,6 +204,8 @@ void get_ns_id_from_memcg(struct mem_cgroup *memcg)
 	struct css_set *cset;
 	struct cgroup_subsys_state *css;
 	struct list_head *lh;
+	u32 ns_id;
+	int pid;
 
 	css = (struct cgroup_subsys_state *)memcg;
 	cgrp = BPF_CORE_READ(css, cgroup);
@@ -212,7 +214,10 @@ void get_ns_id_from_memcg(struct mem_cgroup *memcg)
 	cset = BPF_CORE_READ(link, cset);
 	lh = BPF_CORE_READ(cset, tasks.next);
 	tsk = container_of(lh, struct task_struct, cg_list);
-	bpf_printk("%lx\n", tsk);
+	ns_id = BPF_CORE_READ(tsk, nsproxy, pid_ns_for_children, ns.inum);
+	pid = BPF_CORE_READ(tsk, pid);
+	bpf_printk("pid=%d ns_id=%u\n", pid, ns_id);
+	return ns_id;
 }
 
 SEC("kprobe/account_page_dirtied")
