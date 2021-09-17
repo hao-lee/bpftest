@@ -191,11 +191,6 @@ int get_cgroup_id_from_page(struct page *page)
 	return get_cgroup_id_from_memcg(memcg);
 }
 
-#define offsetof(TYPE, MEMBER)  ((size_t)&((TYPE *)0)->MEMBER)
-#define container_of(ptr, type, member) ({ \
-		void *__mptr = (void *)(ptr); \
-		((type *)(__mptr - offsetof(type, member))); })
-
 int get_ns_id_from_memcg(struct mem_cgroup *memcg)
 {
 	struct cgroup *cgrp;
