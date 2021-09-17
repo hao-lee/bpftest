@@ -23,7 +23,7 @@ struct {
 
 struct {
 	__uint(type, BPF_MAP_TYPE_HASH);
-	__type(key, int); /* cgroup id */
+	__type(key, u32); /* ns id */
 	__type(value, struct cgroup_metrics); /* value */
 	__uint(max_entries, 10240);
 	__uint(pinning, LIBBPF_PIN_BY_NAME);
@@ -387,7 +387,7 @@ int kprobe_shrink_node_memcg(struct pt_regs *ctx)
 	ns_id = get_ns_id_from_memcg((struct mem_cgroup *)ctx->si);
 	if (ns_id == 0)
 		return 0;
-	if (start_timing_with_payload(ctx, ns_id)) {
+	if (start_timing_with_payload(ctx, (u64)ns_id)) {
 		/* print something ? */
 		return 0; /* stack is full */
 	}
@@ -399,7 +399,7 @@ int kretprobe_shrink_node_memcg(struct pt_regs *ctx)
 {
 	u64 initval = 1;
 	u64 delta = 0;
-	u32 ns_id;
+	u64 ns_id;
 	struct cgroup_metrics *valp;
 	int ret = 0;
 	struct task_struct *tsk;
